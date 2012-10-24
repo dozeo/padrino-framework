@@ -1,3 +1,8 @@
+require 'padrino-core/application/rendering'
+require 'padrino-core/application/routing'
+require 'padrino-core/application/flash'
+require 'padrino-core/application/showexceptions'
+
 module Padrino
   class ApplicationSetupError < RuntimeError # @private
   end
@@ -173,14 +178,15 @@ module Padrino
         set :method_override, true
         set :sessions, false
         set :public_folder, Proc.new { Padrino.root('public', uri_root) }
-        set :views, Proc.new { File.join(root,   "views") }
-        set :images_path, Proc.new { File.join(public, "images") }
+        set :views, Proc.new { File.join(root, 'views') }
+        set :images_path, Proc.new { File.join(public_folder, 'images') }
         set :protection, false
+        # Haml specific
+        set :haml, { :ugly => (Padrino.env == :production) } if defined?(Haml)
         # Padrino specific
         set :uri_root, '/'
         set :app_name, settings.to_s.underscore.to_sym
         set :default_builder, 'StandardFormBuilder'
-        set :flash, defined?(Sinatra::Flash) || defined?(Rack::Flash)
         set :authentication, false
         # Padrino locale
         set :locale_path, Proc.new { Dir[File.join(settings.root, '/locale/**/*.{rb,yml}')] }
@@ -241,28 +247,14 @@ module Padrino
       # Also initializes the application after setting up the middleware
       def setup_default_middleware(builder)
         setup_sessions builder
-        setup_flash builder
         builder.use Padrino::ShowExceptions         if show_exceptions?
         builder.use Padrino::Logger::Rack, uri_root if Padrino.logger && logging?
         builder.use Padrino::Reloader::Rack         if reload?
         builder.use Rack::MethodOverride            if method_override?
         builder.use Rack::Head
+        register    Padrino::Flash
         setup_protection builder
         setup_application!
-      end
-
-       # TODO Remove this in a few versions (rack-flash deprecation)
-       # Move register Sinatra::Flash into setup_default_middleware
-       # Initializes flash using sinatra-flash or rack-flash
-      def setup_flash(builder)
-        register Sinatra::Flash if flash? && defined?(Sinatra::Flash)
-        if defined?(Rack::Flash) && !defined?(Sinatra::Flash)
-          logger.warn %Q{
-            [Deprecation] In Gemfile, 'rack-flash' should be replaced with 'sinatra-flash'!
-            Rack-Flash is not compatible with later versions of Rack and should be replaced.
-          }
-          builder.use Rack::Flash, :sweep => true if flash?
-        end
       end
     end # self
   end # Application

@@ -156,7 +156,7 @@ module Padrino
         #
         def render(engine, data=nil, options={}, locals={}, &block)
           # If engine is a hash then render data converted to json
-          content_type(:json, :charset => 'utf-8') and return engine.to_json if engine.is_a?(Hash)
+          content_type(:json, :charset => 'utf-8') and return engine.to_json if engine.is_a?(Hash) || engine.is_a?(Array)
 
           # If engine is nil, ignore engine parameter and shift up all arguments
           # render nil, "index", { :layout => true }, { :localvar => "foo" }
@@ -175,10 +175,10 @@ module Padrino
           root = settings.respond_to?(:root) ? settings.root : ""
 
           # Use @layout if it exists
-          options[:layout] = @layout if options[:layout].nil?
+          options[:layout] = @layout if options[:layout].nil? || options[:layout] == true
 
           # Resolve layouts similar to in Rails
-          if (options[:layout].nil? || options[:layout] == true) && !settings.templates.has_key?(:layout)
+          if options[:layout].nil? && !settings.templates.has_key?(:layout)
             layout_path, layout_engine = *resolved_layout
             options[:layout] = layout_path || false # We need to force layout false so sinatra don't try to render it
             options[:layout] = false unless layout_engine == engine # TODO allow different layout engine
