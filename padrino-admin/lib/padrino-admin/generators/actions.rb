@@ -27,14 +27,14 @@ module Padrino
         # Tell us for now wich orm we support
         #
         def supported_orm
-          [:mini_record, :datamapper, :activerecord, :mongomapper, :mongoid, :couchrest, :sequel]
+          [:mini_record, :datamapper, :activerecord, :mongomapper, :mongoid, :couchrest, :sequel, :ohm]
         end
 
         ##
         # Tell us for now wich rendering engine we support
         #
         def supported_ext
-          [:haml, :erb, :slim]
+          [:haml, :slim, :erb]
         end
 
         ##
