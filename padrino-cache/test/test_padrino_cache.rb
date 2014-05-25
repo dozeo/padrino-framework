@@ -1,13 +1,12 @@
-require File.expand_path(File.dirname(__FILE__) + '/helper')
+require File.expand_path('../helper', __FILE__)
 
 describe "PadrinoCache" do
-
-  def teardown
-    tmp = File.expand_path(File.dirname(__FILE__) + "/tmp")
-    `rm -rf #{tmp}`
+  after do
+    tmp = File.expand_path("../tmp", __FILE__)
+    %x[rm -rf #{tmp}]
   end
 
-  should 'cache a fragment' do
+  it 'should cache a fragment' do
     called = false
     mock_app do
       register Padrino::Cache
@@ -20,10 +19,10 @@ describe "PadrinoCache" do
     get "/foo"
     assert_equal 200, status
     assert_equal 'test fragment', body
-    assert_not_equal called, false
+    refute_equal called, false
   end
 
-  should 'cache a page' do
+  it 'should cache a page' do
     called = false
     mock_app do
       register Padrino::Cache
@@ -36,10 +35,10 @@ describe "PadrinoCache" do
     get "/foo"
     assert_equal 200, status
     assert_equal 'test page', body
-    assert_not_equal false, called
+    refute_equal false, called
   end
 
-  should 'delete from the cache' do
+  it 'should delete from the cache' do
     called = false
     mock_app do
       register Padrino::Cache
@@ -54,10 +53,10 @@ describe "PadrinoCache" do
     get "/foo"
     assert_equal 200, status
     assert_equal 'test page again', body
-    assert_not_equal false, called
+    refute_equal false, called
   end
 
-  should 'accept custom cache keys' do
+  it 'should accept custom cache keys' do
     called = false
     mock_app do
       register Padrino::Cache
@@ -87,19 +86,19 @@ describe "PadrinoCache" do
     get "/foo"
     assert_equal 200, status
     assert_equal 'foo', body
-    assert_equal 'foo', @app.cache.get(:foo)[:response_buffer]
+    assert_equal 'foo', @app.cache[:foo][:body]
     get "/foo"
     assert_equal 'foo', body
 
     get "/bar"
     assert_equal 200, status
     assert_equal 'bar', body
-    assert_equal 'bar', @app.cache.get(:bar)[:response_buffer]
+    assert_equal 'bar', @app.cache[:bar][:body]
     get "/bar"
     assert_equal 'bar', body
   end
 
-  should 'delete based on urls' do
+  it 'should delete based on urls' do
     called = false
     mock_app do
       register Padrino::Cache
@@ -116,7 +115,7 @@ describe "PadrinoCache" do
     assert_equal 'test page again', body
   end
 
-  should 'accept allow controller-wide caching' do
+  it 'should accept allow controller-wide caching' do
     called = false
     mock_app do
       controller :cache => true do
@@ -133,7 +132,7 @@ describe "PadrinoCache" do
     assert_equal 'test', body
   end
 
-  should 'allow cache disabling on a per route basis' do
+  it 'should allow cache disabling on a per route basis' do
     called = false
     mock_app do
       register Padrino::Cache
@@ -150,14 +149,14 @@ describe "PadrinoCache" do
     assert_equal 'test again', body
   end
 
-  should 'allow expiring for pages' do
+  it 'should allow expiring for pages' do
     called = false
     mock_app do
       register Padrino::Cache
       enable :caching
       controller :cache => true do
         get("/foo") {
-          expires_in 1
+          expires 1
           called ? 'test again' : (called = 'test')
         }
       end
@@ -168,21 +167,20 @@ describe "PadrinoCache" do
     get "/foo"
     assert_equal 200, status
     assert_equal 'test', body
-    sleep 2
-    get "/foo"
+    Time.stub(:now, Time.now + 3) { get "/foo" }
     assert_equal 200, status
     assert_equal 'test again', body
   end
 
-  should 'allow expiring for fragments' do
+  it 'should allow expiring for fragments' do
     called = false
     mock_app do
       register Padrino::Cache
       enable :caching
       controller do
         get("/foo") {
-          expires_in 1
-          cache(:test, :expires_in => 2) do
+          expires 1
+          cache(:test, :expires => 2) do
             called ? 'test again' : (called = 'test')
           end
         }
@@ -194,13 +192,12 @@ describe "PadrinoCache" do
     get "/foo"
     assert_equal 200, status
     assert_equal 'test', body
-    sleep 2
-    get "/foo"
+    Time.stub(:now, Time.now + 3) { get "/foo" }
     assert_equal 200, status
     assert_equal 'test again', body
   end
 
-  should 'allow disabling of the cache' do
+  it 'should allow disabling of the cache' do
     called = false
     mock_app do
       register Padrino::Cache
@@ -214,5 +211,139 @@ describe "PadrinoCache" do
     assert_equal 'test', body
     get "/foo"
     assert_equal 500, status
+  end
+
+  it 'should not cache integer statuses' do
+    mock_app do
+      register Padrino::Cache
+      enable :caching
+      get( '/404', :cache => true ) { not_found }
+      get( '/503', :cache => true ) { error 503 }
+      not_found { 'fancy 404' }
+      error( 503 ) { 'fancy 503' }
+    end
+    get '/404'
+    assert_equal 'fancy 404', body
+    assert_equal 404, status
+    assert_equal nil, @app.cache['/404']
+    get '/404'
+    assert_equal 'fancy 404', body
+    assert_equal 404, status
+    get '/503'
+    assert_equal 'fancy 503', body
+    assert_equal 503, status
+    assert_equal nil, @app.cache['/503']
+    get '/503'
+    assert_equal 'fancy 503', body
+    assert_equal 503, status
+  end
+
+  it 'should cache should not hit with unique params' do
+    call_count = 0
+    mock_app do
+      register Padrino::Cache
+      enable :caching
+      before do
+        param = params[:test] || 'none'
+        cache_key "foo?#{param}"
+      end
+      get '/foo/:test', :cache => true do
+        param = params[:test] || 'none'
+        call_count += 1
+        "foo?#{param}"
+      end
+    end
+
+    get '/foo/none'
+    get '/foo/none'
+    assert_equal 200, status
+    assert_equal 'foo?none', body
+    assert_equal 1, call_count
+
+    get '/foo/yes'
+    assert_equal 'foo?yes', body
+    assert_equal 2, call_count
+  end
+
+  it 'should resolve block cache keys' do
+    call_count = 0
+    mock_app do
+      register Padrino::Cache
+      enable :caching
+
+      get '/foo', :cache => true do
+        cache_key { "key #{params[:id]}" }
+        call_count += 1
+        params[:id]
+      end
+    end
+
+    get '/foo?id=1'
+    get '/foo?id=2'
+    get '/foo?id=2'
+    get '/foo?id=1&something_else=42'
+    get '/foo?id=3&something_else=42'
+
+    assert_equal 3, call_count
+  end
+
+  it 'should raise an error if providing both a cache_key and block' do
+    mock_app do
+      register Padrino::Cache
+      enable :caching
+
+      get '/foo', :cache => true do
+        cache_key(:some_key) { "key #{params[:id]}" }
+      end
+    end
+
+    assert_raises(RuntimeError) { get '/foo' }
+  end
+
+  it 'should cache content_type' do
+    called = false
+    mock_app do
+      register Padrino::Cache
+      enable :caching
+      get '/foo', :cache => true do
+        content_type :json
+        if called
+          "you'll never see me"
+        else
+          cache_key :foo
+          called = '{"foo":"bar"}'
+
+          called
+        end
+      end
+    end
+    get "/foo"
+    assert_equal 200, status
+    assert_equal '{"foo":"bar"}', body
+    assert_equal '{"foo":"bar"}', @app.cache[:foo][:body]
+    get "/foo"
+    assert_equal '{"foo":"bar"}', body
+    assert_match /json/, last_response.content_type
+  end
+
+  it 'should cache an object' do
+    counter = 0
+    mock_app do
+      register Padrino::Cache
+      enable :caching
+      get '/' do
+        result = ''
+        2.times do
+          result = cache_object 'object1' do
+            counter += 1
+            { :foo => 'bar' }
+          end
+        end
+        result[:foo].to_s
+      end
+    end
+    get '/'
+    assert_equal 'bar', body
+    assert_equal 1, counter
   end
 end

@@ -1,5 +1,5 @@
 module Padrino
-  class << self
+  module Loader
     ##
     # Hooks to be called before a load/reload.
     #
@@ -41,17 +41,6 @@ module Padrino
     end
 
     ##
-    # The used +$LOAD_PATHS+ from Padrino.
-    #
-    # @return [Array<String>]
-    #   The load paths used by Padrino.
-    #
-    def load_paths
-      @_load_paths_was = %w(lib models shared).map { |path| Padrino.root(path) }
-      @_load_paths ||= @_load_paths_was
-    end
-
-    ##
     # Requires necessary dependencies as well as application files from root
     # lib and models.
     #
@@ -60,16 +49,17 @@ module Padrino
     #
     def load!
       return false if loaded?
+      began_at = Time.now
       @_called_from = first_caller
-      Padrino.set_encoding
-      Padrino.set_load_paths(*load_paths) # We set the padrino load paths
-      Padrino::Logger.setup! # Initialize our logger
-      Padrino.require_dependencies("#{root}/config/database.rb", :nodeps => true) # Be sure to don't remove constants from dbs.
-      Padrino::Reloader.lock! # Now we can remove constant from here to down
-      Padrino.before_load.each(&:call) # Run before hooks
-      Padrino.dependency_paths.each { |path| Padrino.require_dependencies(path) }
-      Padrino.after_load.each(&:call) # Run after hooks
-      Padrino::Reloader.run!
+      set_encoding
+      set_load_paths(*load_paths)
+      Logger.setup!
+      require_dependencies("#{root}/config/database.rb")
+      Reloader.lock!
+      before_load.each(&:call)
+      require_dependencies(*dependency_paths)
+      after_load.each(&:call)
+      logger.devel "Loaded Padrino in #{Time.now - began_at} seconds"
       Thread.current[:padrino_loaded] = true
     end
 
@@ -79,14 +69,14 @@ module Padrino
     # @return [NilClass]
     #
     def clear!
-      Padrino.clear_middleware!
-      Padrino.mounted_apps.clear
+      clear_middleware!
+      mounted_apps.clear
       @_load_paths = nil
       @_dependency_paths = nil
       @_global_configuration = nil
-      Padrino.before_load.clear
-      Padrino.after_load.clear
-      Padrino::Reloader.clear!
+      before_load.clear
+      after_load.clear
+      Reloader.clear!
       Thread.current[:padrino_loaded] = nil
     end
 
@@ -94,14 +84,14 @@ module Padrino
     # Method for reloading required applications and their files.
     #
     def reload!
-      return unless Padrino::Reloader.changed?
-      Padrino.before_load.each(&:call) # Run before hooks
-      Padrino::Reloader.reload! # detects the modified files
-      Padrino.after_load.each(&:call) # Run after hooks
+      return unless Reloader.changed?
+      before_load.each(&:call)
+      Reloader.reload!
+      after_load.each(&:call)
     end
 
     ##
-    # This adds the ablity to instantiate {Padrino.load!} after
+    # This adds the ability to instantiate {Padrino.load!} after
     # {Padrino::Application} definition.
     #
     def called_from
@@ -131,7 +121,7 @@ module Padrino
     #
     #   Dir["/models/*.rb"].each { |r| require r }
     #
-    # we get an error, because we try to require first +a.rb+ that need
+    # We get an error, because we try to require first +a.rb+ that need
     # _something_ of +b.rb+.
     #
     # With this method we don't have this problem.
@@ -143,58 +133,32 @@ module Padrino
     #   require_dependencies("#{Padrino.root}/lib/**/*.rb")
     #
     def require_dependencies(*paths)
-      options = paths.extract_options!
-
-      # Extract all files to load
-      files = paths.flatten.map { |path| Dir[path] }.flatten.uniq.sort
+      options = paths.extract_options!.merge( :cyclic => true )
+      files = paths.flatten.map{|path| Dir[path].sort_by{|v| v.count('/') }}.flatten.uniq
 
       while files.present?
-        # List of errors and failed files
-        errors, failed = [], []
+        error, fatal, loaded = nil, nil, nil
 
-        # We need a size to make sure things are loading
-        size_at_start = files.size
-
-        # Now we try to require our dependencies, we dup files
-        # so we don't perform delete on the original array during
-        # iteration, this prevent problems with rubinus
         files.dup.each do |file|
           begin
-            Padrino::Reloader.safe_load(file, options.dup)
+            Reloader.safe_load(file, options)
             files.delete(file)
-          rescue LoadError => e
-            errors << e
-            failed << file
-          rescue NameError => e
-            errors << e
-            failed << file
+            loaded = true
+          rescue NameError, LoadError => e
+            logger.devel "Cyclic dependency reload for #{e.class}: #{e.message}"
+            error = e
           rescue Exception => e
-            raise e
+            fatal = e
+            break
           end
         end
 
-        # Stop processing if nothing loads or if everything has loaded
-        raise errors.last if files.size == size_at_start && files.present?
-        break if files.empty?
+        if fatal || !loaded
+          e = fatal || error
+          logger.exception e, :short
+          raise e
+        end
       end
-    end
-
-    ##
-    # Returns default list of path globs to load as dependencies
-    # Appends custom dependency patterns to the be loaded for Padrino.
-    #
-    # @return [Array<String>]
-    #   The dependencey paths.
-    #
-    # @example
-    #   Padrino.dependency_paths << "#{Padrino.root}/uploaders/*.rb"
-    #
-    def dependency_paths
-      @_dependency_paths_was = [
-        "#{root}/config/database.rb", "#{root}/lib/**/*.rb", "#{root}/shared/lib/**/*.rb",
-        "#{root}/models/**/*.rb", "#{root}/shared/models/**/*.rb", "#{root}/config/apps.rb"
-      ]
-      @_dependency_paths ||= @_dependency_paths_was
     end
 
     ##
@@ -204,8 +168,57 @@ module Padrino
     #   The paths to concat.
     #
     def set_load_paths(*paths)
-      $:.concat(paths); load_paths.concat(paths)
-      $:.uniq!; load_paths.uniq!
+      load_paths.concat(paths).uniq!
+      $LOAD_PATH.concat(paths).uniq!
     end
-  end # self
-end # Padrino
+
+    ##
+    # The used +$LOAD_PATHS+ from Padrino.
+    #
+    # @return [Array<String>]
+    #   The load paths used by Padrino.
+    #
+    def load_paths
+      @_load_paths ||= load_paths_was.dup
+    end
+
+    ##
+    # Returns default list of path globs to load as dependencies.
+    # Appends custom dependency patterns to the be loaded for Padrino.
+    #
+    # @return [Array<String>]
+    #   The dependencey paths.
+    #
+    # @example
+    #   Padrino.dependency_paths << "#{Padrino.root}/uploaders/*.rb"
+    #
+    def dependency_paths
+      @_dependency_paths ||= dependency_paths_was + module_paths
+    end
+
+    private
+
+    def module_paths
+      modules.map(&:dependency_paths).flatten
+    end
+
+    def load_paths_was
+      @_load_paths_was ||= [
+        "#{root}/lib",
+        "#{root}/models",
+        "#{root}/shared",
+      ].freeze
+    end
+
+    def dependency_paths_was
+      @_dependency_paths_was ||= [
+        "#{root}/config/database.rb",
+        "#{root}/lib/**/*.rb",
+        "#{root}/models/**/*.rb",
+        "#{root}/shared/lib/**/*.rb",
+        "#{root}/shared/models/**/*.rb",
+        "#{root}/config/apps.rb"
+      ].freeze
+    end
+  end
+end

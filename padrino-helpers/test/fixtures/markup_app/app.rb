@@ -1,13 +1,15 @@
-require 'sinatra/base'
-require 'haml'
-require 'erubis'
-require 'slim'
+require 'padrino-core'
 
 class MarkupDemo < Sinatra::Base
   register Padrino::Helpers
 
   configure do
+    set :logging, false
+    set :padrino_logging, false
+    set :environment, :test
     set :root, File.dirname(__FILE__)
+    set :sessions, true
+    set :protect_from_csrf, true
   end
 
   get '/:engine/:file' do
@@ -23,27 +25,39 @@ class MarkupDemo < Sinatra::Base
 
     def captured_content(&block)
       content_html = capture_html(&block)
-      "<p>#{content_html}</p>"
+      "<p>#{content_html}</p>".html_safe
     end
 
     def concat_in_p(content_html)
-      concat_content "<p>#{content_html}</p>"
+      concat_safe_content "<p>#{content_html}</p>"
     end
 
-    def determine_block_is_template(name, &block)
-      concat_content "<p class='is_template'>The #{name} block passed in is a template</p>" if block_is_template?(block)
+    def concat_if_block_is_template(name, &block)
+      concat_safe_content "<p class='is_template'>The #{name} block passed in is a template</p>" if block_is_template?(block)
     end
 
-    def ruby_not_template_block
-      determine_block_is_template('ruby') do
+    def concat_ruby_not_template_block
+      concat_if_block_is_template('ruby') do
         content_tag(:span, "This not a template block")
       end
+    end
+
+    def content_tag_with_block
+      one = content_tag(:p) do
+        "one"
+      end
+      two = content_tag(:p) do
+        "two"
+      end
+      one << two
+    rescue
+      "<p>failed</p>".html_safe
     end
   end
 end
 
 class MarkupUser
-  def errors; { :fake => "must be valid", :second => "must be present", :third  => "must be a number", :email => "must be a email"}; end
+  def errors; { :fake => "must be valid", :second => "must be present", :third  => "must be a number", :email => "must be an email"}; end
   def session_id; 45; end
   def gender; 'male'; end
   def remember_me; '1'; end

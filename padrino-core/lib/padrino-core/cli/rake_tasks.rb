@@ -1,14 +1,29 @@
-# Load rake tasks from common rake task definition locations
-Dir["lib/tasks/**/*.rake"].
-  concat(Dir["tasks/**/*.rake"]).
-  concat(Dir["{test,spec}/*.rake"]).each  { |rake| load(rake) }
+Dir["{lib/tasks/**,tasks/**,test,spec}/*.rake"].each do |file|
+  begin
+    load(file)
+  rescue LoadError => e
+    warn "#{file}: #{e.message}"
+  end
+end
 
-# Loads the Padrino applications mounted within the project
-# setting up the required environment for Padrino
+# Loads the Padrino applications mounted within the project.
+# Setting up the required environment for Padrino.
 task :environment do
+  require File.expand_path('config/boot.rb', Rake.application.original_dir)
+
   Padrino.mounted_apps.each do |app|
     app.app_obj.setup_application!
   end
+end
+
+# Loads skeleton Padrino environment, no models, no application settings.
+task :skeleton do
+  module Padrino::Reloader
+    def self.safe_load(file, options)
+      super unless file.include?('/models/')
+    end
+  end
+  require File.expand_path('config/boot.rb', Rake.application.original_dir)
 end
 
 desc "Generate a secret key"
@@ -16,7 +31,6 @@ task :secret do
   shell.say SecureRandom.hex(32)
 end
 
-# lists all routes of a given app
 def list_app_routes(app, args)
   app_routes = app.named_routes
   app_routes.reject! { |r| r.identifier.to_s !~ /#{args.query}/ } if args.query.present?
@@ -44,16 +58,5 @@ namespace :routes do
   task :app, [:app] => :environment do |t, args|
     app = Padrino.mounted_apps.find { |app| app.app_class == args.app }
     list_app_routes(app, args) if app
-  end
-end
-
-desc "Generate the Rakefile"
-task :gen do
-  File.open(Padrino.root("Rakefile"), "w") do |file|
-    file.puts <<-RUBY.gsub(/^ {6}/, '')
-      require File.expand_path('../config/boot.rb', __FILE__)
-      require 'padrino-core/cli/rake'
-      PadrinoTasks.init
-    RUBY
   end
 end

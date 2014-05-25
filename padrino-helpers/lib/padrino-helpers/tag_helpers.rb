@@ -5,13 +5,20 @@ module Padrino
     #
     module TagHelpers
       ##
-      # Tag values escaped to html entities
+      # Tag values escaped to html entities.
       #
       ESCAPE_VALUES = {
+        "&" => "&amp;",
         "<" => "&lt;",
         ">" => "&gt;",
         '"' => "&quot;"
       }
+
+      ##
+      # Cached Regexp for escaping values to avoid rebuilding one
+      # on every escape operation.
+      #
+      ESCAPE_REGEXP = Regexp.union(*ESCAPE_VALUES.keys)
 
       BOOLEAN_ATTRIBUTES = [
         :autoplay,
@@ -25,7 +32,13 @@ module Padrino
         :muted,
         :readonly,
         :required,
-        :selected
+        :selected,
+        :declare,
+        :defer,
+        :ismap,
+        :itemscope,
+        :noresize,
+        :novalidate
       ]
 
       ##
@@ -43,13 +56,19 @@ module Padrino
       ]
 
       ##
-      # Creates an HTML tag with given name, content, and options
+      # A html_safe newline string to avoid allocating a new on each
+      # concatenation.
+      #
+      NEWLINE = "\n".html_safe.freeze
+
+      ##
+      # Creates an HTML tag with given name, content, and options.
       #
       # @overload content_tag(name, content, options = nil)
       #   @param [Symbol] name
       #     The name of the HTML tag to create.
       #   @param [String] content
-      #     The content inside of the the tag.
+      #     The content inside of the tag.
       #   @param [Hash] options
       #     The HTML options to include in this tag.
       #
@@ -80,7 +99,7 @@ module Padrino
       #     Specifies whether or not the element is editable.
       #
       # @return [String]
-      #   Generated HTML with specified +options+
+      #   Generated HTML with specified +options+.
       #
       # @example
       #   content_tag(:p, 'Hello World', :class => 'light')
@@ -97,23 +116,38 @@ module Padrino
       #   # =>   <a href="http://www.padrinorb.com">Padrino</a>
       #   # => </p>
       #
-      # @api public
       def content_tag(name, content = nil, options = nil, &block)
         if block_given?
           options = content if content.is_a?(Hash)
           content = capture_html(&block)
         end
 
-        content = content.join("\n") if content.respond_to?(:join)
-
         options    = parse_data_options(name, options)
         attributes = tag_attributes(options)
-        output = "<#{name}#{attributes}>#{content}</#{name}>"
+        output = ActiveSupport::SafeBuffer.new
+        output.safe_concat "<#{name}#{attributes}>"
+        if content.respond_to?(:each) && !content.is_a?(String)
+          content.each{ |item| output.concat item; output.safe_concat NEWLINE }
+        else
+          output.concat content.to_s
+        end
+        output.safe_concat "</#{name}>"
+
         block_is_template?(block) ? concat_content(output) : output
       end
 
       ##
-      # Creates an HTML input field with the given type and options
+      # Like #content_tag, but assumes its input to be safe and doesn't
+      # escape. It also returns safe HTML.
+      #
+      # @see #content_tag
+      #
+      def safe_content_tag(name, content = nil, options = nil, &block)
+        mark_safe(content_tag(name, mark_safe(content), options, &block))
+      end
+
+      ##
+      # Creates an HTML input field with the given type and options.
       #
       # @param [Symbol] type
       #   The type of input to create.
@@ -143,14 +177,14 @@ module Padrino
       # @option options [Boolean] :autofocus
       #   Specifies whether or not the input should automatically get focus when the page loads.
       # @option options [Boolean] :required
-      #   Specifies whether or not the input is required to be completeled before the form is submitted.
+      #   Specifies whether or not the input is required to be completed before the form is submitted.
       # @option options [Boolean] :readonly
       #   Specifies whether or not the input is read only.
       # @option options [Boolean] :disabled
       #   Specifies whether or not the input is disabled.
       #
       # @return [String]
-      #   Generated HTML with specified +options+
+      #   Generated HTML with specified +options+.
       #
       # @example
       #   input_tag :text, :name => 'handle'
@@ -165,13 +199,12 @@ module Padrino
       #   input_tag :number, :name => 'credit_card', :autocomplete => :off
       #   # => <input type="number" autocomplete="off" />
       #
-      # @api semipublic
       def input_tag(type, options = {})
         tag(:input, options.reverse_merge!(:type => type))
       end
 
       ##
-      # Creates an HTML tag with the given name and options
+      # Creates an HTML tag with the given name and options.
       #
       # @param [Symbol] name
       #  The name of the HTML tag to create.
@@ -181,11 +214,11 @@ module Padrino
       # @macro global_html_attributes
       #
       # @return [String]
-      #   Generated HTML with specified +options+
+      #   Generated HTML with specified +options+.
       #
       # @example
       #   tag :hr, :class => 'dotted'
-      #   # => <hr class="dotted">
+      #   # => <hr class="dotted" />
       #
       #   tag :input, :name => 'username', :type => :text
       #   # => <input name="username" type="text" />
@@ -196,17 +229,17 @@ module Padrino
       #   tag :img, :src => 'sinatra.jpg, :data => { :nsfw => false, :geo => [34.087, -118.407] }
       #   # => <img src="sinatra.jpg" data-nsfw="false" data-geo="34.087 -118.407" />
       #
-      # @api public
       def tag(name, options = nil, open = false)
         options    = parse_data_options(name, options)
         attributes = tag_attributes(options)
-        "<#{name}#{attributes}#{open ? '>' : ' />'}"
+        "<#{name}#{attributes}#{open ? '>' : ' />'}".html_safe
       end
 
       private
+
       ##
-      # Returns a compiled list of HTML attributes
-      ##
+      # Returns a compiled list of HTML attributes.
+      #
       def tag_attributes(options)
         return '' if options.nil?
         attributes = options.map do |k, v|
@@ -224,13 +257,13 @@ module Padrino
 
       ##
       # Escape tag values to their HTML/XML entities.
-      ##
+      #
       def escape_value(string)
-        string.to_s.gsub(Regexp.union(*ESCAPE_VALUES.keys)) { |c| ESCAPE_VALUES[c] }
+        string.to_s.gsub(ESCAPE_REGEXP) { |c| ESCAPE_VALUES[c] }
       end
 
       ##
-      # Iterate through nested values
+      # Iterate through nested values.
       #
       def nested_values(attribute, hash)
         hash.map do |k, v|
@@ -243,7 +276,7 @@ module Padrino
       end
 
       ##
-      # Parses custom data attributes
+      # Parses custom data attributes.
       #
       def parse_data_options(tag, options)
         return if options.nil?
@@ -255,6 +288,6 @@ module Padrino
         end
         parsed_options
       end
-    end # TagHelpers
-  end # Helpers
-end # Padrino
+    end
+  end
+end

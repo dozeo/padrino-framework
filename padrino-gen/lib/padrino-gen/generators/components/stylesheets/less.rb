@@ -1,6 +1,6 @@
 LESS_INIT = <<-LESS unless defined?(LESS_INIT)
     # Enables support for Less template reloading for rack.
-    # Store Less files by default within 'app/stylesheets/'
+    # Store Less files by default within 'app/stylesheets/'.
     # See http://github.com/kelredd/rack-less for more details.
     require 'rack/less'
     # optional - use as necessary
@@ -19,6 +19,7 @@ LESS
 def setup_stylesheet
   require_dependencies 'less'
   require_dependencies 'rack-less'
+  require_dependencies 'therubyracer'
   initializer :less, LESS_INIT
   empty_directory destination_root('/app/stylesheets')
 end

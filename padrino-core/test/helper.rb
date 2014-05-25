@@ -1,21 +1,21 @@
-ENV['PADRINO_ENV'] = 'test'
+ENV['RACK_ENV'] = 'test'
 PADRINO_ROOT = File.dirname(__FILE__) unless defined?(PADRINO_ROOT)
 
 require File.expand_path('../../../load_paths', __FILE__)
-require File.expand_path('../mini_shoulda', __FILE__)
+require 'minitest/autorun'
+require 'minitest/pride'
+require 'i18n'
+require 'padrino-support'
 require 'padrino-core'
 require 'json'
+require 'builder'
 require 'rack/test'
 require 'rack'
+require 'yaml'
 
 # Rubies < 1.9 don't handle hashes in the properly order so to prevent
 # this issue for now we remove extra values from mimetypes.
 Rack::Mime::MIME_TYPES.delete(".xsl") # In this way application/xml respond only to .xml
-
-class Sinatra::Base
-  # Allow assertions in request context
-  include MiniTest::Assertions
-end
 
 class MiniTest::Spec
   include Rack::Test::Methods
@@ -49,35 +49,4 @@ class MiniTest::Spec
   end
 
   alias :response :last_response
-
-  def create_template(name, content, options={})
-    FileUtils.mkdir_p(File.dirname(__FILE__) + "/views")
-    FileUtils.mkdir_p(File.dirname(__FILE__) + "/views/layouts")
-    path  = "/views/#{name}"
-    path += ".#{options.delete(:locale)}" if options[:locale].present?
-    path += ".#{options[:format]}" if options[:format].present?
-    path += ".erb" unless options[:format].to_s =~ /haml|rss|atom/
-    path += ".builder" if options[:format].to_s =~ /rss|atom/
-    file  = File.dirname(__FILE__) + path
-    File.open(file, 'w') { |io| io.write content }
-    file
-  end
-  alias :create_view   :create_template
-  alias :create_layout :create_template
-
-  def remove_views
-    FileUtils.rm_rf(File.dirname(__FILE__) + "/views")
-  end
-
-  def with_template(name, content, options={})
-    # Build a temp layout
-    template = create_template(name, content, options)
-    yield
-  ensure
-    # Remove temp layout
-    File.unlink(template) rescue nil
-    remove_views
-  end
-  alias :with_view   :with_template
-  alias :with_layout :with_template
 end

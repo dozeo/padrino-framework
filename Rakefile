@@ -10,11 +10,13 @@ GEM_NAME = 'padrino-framework'
 
 padrino_gems = %w[
   padrino-core
-  padrino-gen
+  padrino-support
   padrino-helpers
   padrino-mailer
-  padrino-admin
   padrino-cache
+  padrino-admin
+  padrino-gen
+  padrino-performance
   padrino
 ]
 
@@ -45,7 +47,9 @@ end
 
 desc "Clean pkg and other stuff"
 task :uninstall do
-  sh "gem search --no-version padrino | grep padrino | xargs gem uninstall -a"
+  padrino_gems.each {|gem|
+    system("gem uninstall #{gem} --force -I -x 2>/dev/null")
+  }
 end
 
 desc "Displays the current version"
@@ -93,6 +97,13 @@ task :test do
   GEM_PATHS[0..-2].each do |g|
     # Hardcode the 'cd' into the command and do not use Dir.chdir because this causes random tests to fail
     sh "cd #{File.join(ROOT, g)} && #{Gem.ruby} -S rake test"
+  end
+end
+
+padrino_gems.each do |element|
+  desc "Run tests for #{element} component"
+  task element.to_s do
+    sh "cd #{element} && #{Gem.ruby} -S rake test"
   end
 end
 

@@ -6,7 +6,27 @@ describe "AdminApplication" do
     load_fixture 'data_mapper'
   end
 
-  should 'require correctly login' do
+  describe "session id setting" do
+    it "should provide it if it doesn't exist" do
+      mock_app do
+        register Padrino::Admin::AccessControl
+      end
+
+      assert_equal @app.session_id, "_padrino_#{File.basename(Padrino.root)}_#{@app.app_name}".to_sym
+    end
+
+    # it "should preserve it if it already existed" do
+    #   Padrino.configure_apps { enable :sessions; set :session_id, "foo" }
+
+    #   mock_app do
+    #     register Padrino::Admin::AccessControl
+    #   end
+
+    #   assert_equal @app.session_id, "foo"
+    # end
+  end
+
+  it 'should require correctly login' do
     mock_app do
       register Padrino::Admin::AccessControl
       enable :sessions
@@ -33,7 +53,7 @@ describe "AdminApplication" do
     assert_equal "unauthenticated", body
   end
 
-  should 'set basic roles with store location and login page' do
+  it 'should set basic roles with store location and login page' do
     mock_app do
       set    :app_name, :basic_app
       register Padrino::Admin::AccessControl
@@ -69,7 +89,7 @@ describe "AdminApplication" do
     assert_equal "foo", body
   end
 
-  should 'set advanced roles with store location and login page' do
+  it 'should set advanced roles with store location and login page' do
     mock_app do
       register Padrino::Admin::AccessControl
       enable :sessions
@@ -88,16 +108,6 @@ describe "AdminApplication" do
         role.project_module :posts, "/posts"
       end
 
-      assert access_control.allowed?(Account.admin, "/login")
-      assert access_control.allowed?(Account.admin, "/any")
-      assert access_control.allowed?(Account.admin, "/settings")
-      assert ! access_control.allowed?(Account.admin, "/posts")
-
-      assert access_control.allowed?(Account.editor, "/login")
-      assert access_control.allowed?(Account.editor, "/any")
-      assert ! access_control.allowed?(Account.editor, "/settings")
-      assert access_control.allowed?(Account.editor, "/posts")
-
       # Prepare a basic page
       get "/login(/:role)" do
         set_current_account(Account.send(params[:role])) if params[:role]
@@ -108,6 +118,16 @@ describe "AdminApplication" do
       get "/settings" do; "settings"; end
       get "/posts"    do; "posts";    end
     end
+
+    assert @app.access_control.allowed?(Account.admin, "/login")
+    assert @app.access_control.allowed?(Account.admin, "/any")
+    assert @app.access_control.allowed?(Account.admin, "/settings")
+    assert ! @app.access_control.allowed?(Account.admin, "/posts")
+
+    assert @app.access_control.allowed?(Account.editor, "/login")
+    assert @app.access_control.allowed?(Account.editor, "/any")
+    assert ! @app.access_control.allowed?(Account.editor, "/settings")
+    assert @app.access_control.allowed?(Account.editor, "/posts")
 
     get "/login"
     assert_equal "logged as any", body
@@ -146,7 +166,7 @@ describe "AdminApplication" do
     assert_equal "posts", body
   end
 
-  should 'emulate an ecommerce app' do
+  it 'should emulate an ecommerce app' do
     mock_app do
       register Padrino::Admin::AccessControl
       enable :sessions
@@ -197,7 +217,7 @@ describe "AdminApplication" do
     assert_equal "Cart Empty", body
   end
 
-  should 'check access control helper' do
+  it 'should check access control helper' do
     mock_app do
       register Padrino::Admin::AccessControl
       enable :sessions

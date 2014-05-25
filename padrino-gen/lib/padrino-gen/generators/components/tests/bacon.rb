@@ -1,16 +1,23 @@
 BACON_SETUP = (<<-TEST).gsub(/^ {10}/, '') unless defined?(BACON_SETUP)
-PADRINO_ENV = 'test' unless defined?(PADRINO_ENV)
+RACK_ENV = 'test' unless defined?(RACK_ENV)
 require File.expand_path(File.dirname(__FILE__) + "/../config/boot")
 
 class Bacon::Context
   include Rack::Test::Methods
 end
 
-def app
-  ##
-  # You can handle all padrino applications using instead:
-  #   Padrino.application
-  CLASS_NAME.tap { |app|  }
+# You can use this method to custom specify a Rack app
+# you want rack-test to invoke:
+#
+#   app CLASS_NAME
+#   app CLASS_NAME.tap { |a| }
+#   app(CLASS_NAME) do
+#     set :foo, :bar
+#   end
+#
+def app(app = nil, &blk)
+  @app ||= block_given? ? app.instance_eval(&blk) : app
+  @app ||= Padrino.application
 end
 TEST
 
@@ -52,7 +59,21 @@ describe "!NAME! Model" do
 end
 TEST
 
-# Setup the testing configuration helper and dependencies
+BACON_HELPER_TEST = <<-TEST unless defined?(BACON_HELPER_TEST)
+require File.expand_path(File.dirname(__FILE__) + '!PATH!/test_config.rb')
+
+describe "!NAME!" do
+  before do
+    @helpers = Class.new
+    @helpers.extend !NAME!
+  end
+
+  it "should return nil" do
+    @helpers.foo.should.equal nil
+  end
+end
+TEST
+
 def setup_test
   require_dependencies 'rack-test', :require => 'rack/test', :group => 'test'
   require_dependencies 'bacon', :group => 'test'
@@ -60,7 +81,6 @@ def setup_test
   create_file destination_root("test/test.rake"), BACON_RAKE
 end
 
-# Generates a controller test given the controllers name
 def generate_controller_test(name)
   bacon_contents       = BACON_CONTROLLER_TEST.gsub(/!NAME!/, name.to_s.underscore.camelize)
   controller_test_path = File.join('test',options[:app],'controllers',"#{name.to_s.underscore}_controller_test.rb")
@@ -69,8 +89,14 @@ end
 
 def generate_model_test(name)
   bacon_contents  = BACON_MODEL_TEST.gsub(/!NAME!/, name.to_s.underscore.camelize).gsub(/!DNAME!/, name.to_s.underscore)
-  path = options[:app] == '.' ? '/..' : '/../..'
-  bacon_contents.gsub!(/!PATH!/,path)
+  bacon_contents.gsub!(/!PATH!/, recognize_path)
   model_test_path = File.join('test',options[:app],'models',"#{name.to_s.underscore}_test.rb")
   create_file destination_root(model_test_path), bacon_contents, :skip => true
+end
+
+def generate_helper_test(name, project_name, app_name)
+  bacon_contents = BACON_HELPER_TEST.gsub(/!NAME!/, "#{project_name}::#{app_name}::#{name}")
+  bacon_contents.gsub!(/!PATH!/, recognize_path)
+  helper_spec_path = File.join('test', options[:app], 'helpers', "#{name.underscore}_test.rb")
+  create_file destination_root(helper_spec_path), bacon_contents, :skip => true
 end

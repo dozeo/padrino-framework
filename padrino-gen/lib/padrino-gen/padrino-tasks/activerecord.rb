@@ -1,7 +1,12 @@
-if defined?(ActiveRecord)
+if PadrinoTasks.load?(:activerecord, defined?(ActiveRecord))
   # Fixes for Yardoc YRI Building
-  class ActiveRecord; end unless defined?(ActiveRecord)
-  class ActiveRecord::Schema; end unless defined?(ActiveRecord::Schema)
+  begin
+    require 'active_record'
+    require 'active_record/schema'
+  rescue LoadError
+    module ActiveRecord; end unless defined?(ActiveRecord)
+    class ActiveRecord::Schema; end unless defined?(ActiveRecord::Schema)
+  end
 
   namespace :ar do
     namespace :create do
@@ -43,9 +48,7 @@ if defined?(ActiveRecord)
               ActiveRecord::Base.establish_connection(config)
               ActiveRecord::Base.connection
             rescue StandardError => e
-              $stderr.puts *(e.backtrace)
-              $stderr.puts e.inspect
-              $stderr.puts "Couldn't create database for #{config.inspect}"
+              catch_error(:create, e, config)
             end
           end
           return # Skip the else clause of begin/rescue
@@ -55,7 +58,7 @@ if defined?(ActiveRecord)
         end
       rescue
         case config[:adapter]
-        when 'mysql', 'mysql2', 'jdbcmysql'
+        when 'mysql', 'mysql2', 'em_mysql2', 'jdbcmysql'
           @charset   = ENV['CHARSET']   || 'utf8'
           @collation = ENV['COLLATION'] || 'utf8_unicode_ci'
           creation_options = {:charset => (config[:charset] || @charset), :collation => (config[:collation] || @collation)}
@@ -76,9 +79,7 @@ if defined?(ActiveRecord)
             ActiveRecord::Base.connection.create_database(config[:database], config.merge(:encoding => @encoding))
             ActiveRecord::Base.establish_connection(config)
           rescue StandardError => e
-            $stderr.puts *(e.backtrace)
-            $stderr.puts e.inspect
-            $stderr.puts "Couldn't create database for #{config.inspect}"
+            catch_error(:create, e, config)
           end
         end
       else
@@ -96,9 +97,7 @@ if defined?(ActiveRecord)
             # Only connect to local databases
             local_database?(config) { drop_database(config) }
           rescue StandardError => e
-            $stderr.puts *(e.backtrace)
-            $stderr.puts e.inspect
-            $stderr.puts "Couldn't drop #{config[:database]}"
+            catch_error(:drop, e, config)
           end
         end
       end
@@ -110,9 +109,7 @@ if defined?(ActiveRecord)
       begin
         drop_database(config)
       rescue StandardError => e
-        $stderr.puts *(e.backtrace)
-        $stderr.puts e.inspect
-        $stderr.puts "Couldn't drop #{config[:database]}"
+        catch_error(:drop, e, config)
       end
     end
 
@@ -132,7 +129,7 @@ if defined?(ActiveRecord)
     end
 
     namespace :migrate do
-      desc  'Rollbacks the database one migration and re migrate up. If you want to rollback more than one step, define STEP=x. Target specific version with VERSION=x.'
+      desc 'Rollbacks the database one migration and re migrate up. If you want to rollback more than one step, define STEP=x. Target specific version with VERSION=x.'
       task :redo => :environment do
         if ENV["VERSION"]
           Rake::Task["ar:migrate:down"].invoke
@@ -147,35 +144,17 @@ if defined?(ActiveRecord)
       task :reset => ["ar:drop", "ar:create", "ar:migrate"]
 
       desc 'Runs the "up" for a given migration VERSION.'
-      task :up => :environment do
-        version = ENV["VERSION"] ? ENV["VERSION"].to_i : nil
-        raise "VERSION is required" unless version
-        ActiveRecord::Migrator.run(:up, "db/migrate/", version)
-        Rake::Task["ar:schema:dump"].invoke if ActiveRecord::Base.schema_format == :ruby
-      end
+      task(:up => :environment){ migrate_as(:up) }
 
       desc 'Runs the "down" for a given migration VERSION.'
-      task :down => :environment do
-        version = ENV["VERSION"] ? ENV["VERSION"].to_i : nil
-        raise "VERSION is required" unless version
-        ActiveRecord::Migrator.run(:down, "db/migrate/", version)
-        Rake::Task["ar:schema:dump"].invoke if ActiveRecord::Base.schema_format == :ruby
-      end
+      task(:down => :environment){ migrate_as(:down) }
     end
 
     desc 'Rolls the schema back to the previous version. Specify the number of steps with STEP=n'
-    task :rollback => :environment do
-      step = ENV['STEP'] ? ENV['STEP'].to_i : 1
-      ActiveRecord::Migrator.rollback('db/migrate/', step)
-      Rake::Task["ar:schema:dump"].invoke if ActiveRecord::Base.schema_format == :ruby
-    end
+    task(:rollback => :environment){ move_as(:rollback) }
 
     desc 'Pushes the schema to the next version. Specify the number of steps with STEP=n'
-    task :forward => :environment do
-      step = ENV['STEP'] ? ENV['STEP'].to_i : 1
-      ActiveRecord::Migrator.forward('db/migrate/', step)
-      Rake::Task["ar:schema:dump"].invoke if ActiveRecord::Base.schema_format == :ruby
-    end
+    task(:forward => :environment){ move_as(:forward) }
 
     desc 'Drops and recreates the database from db/schema.rb for the current environment and loads the seeds.'
     task :reset => [ 'ar:drop', 'ar:setup' ]
@@ -184,7 +163,7 @@ if defined?(ActiveRecord)
     task :charset => :environment do
       config = ActiveRecord::Base.configurations[Padrino.env || :development]
       case config[:adapter]
-      when 'mysql', 'mysql2', 'jdbcmysql'
+      when 'mysql', 'mysql2', 'em_mysql2', 'jdbcmysql'
         ActiveRecord::Base.establish_connection(config)
         puts ActiveRecord::Base.connection.charset
       when 'postgresql'
@@ -199,7 +178,7 @@ if defined?(ActiveRecord)
     task :collation => :environment do
       config = ActiveRecord::Base.configurations[Padrino.env || :development]
       case config[:adapter]
-      when 'mysql', 'mysql2', 'jdbcmysql'
+      when 'mysql', 'mysql2', 'em_mysql2', 'jdbcmysql'
         ActiveRecord::Base.establish_connection(config)
         puts ActiveRecord::Base.connection.collation
       else
@@ -215,7 +194,7 @@ if defined?(ActiveRecord)
     desc "Raises an error if there are pending migrations"
     task :abort_if_pending_migrations => :environment do
       if defined? ActiveRecord
-        pending_migrations = ActiveRecord::Migrator.new(:up, 'db/migrate').pending_migrations
+        pending_migrations = ActiveRecord::Migrator.open(ActiveRecord::Migrator.migrations_paths).pending_migrations
 
         if pending_migrations.any?
           puts "You have #{pending_migrations.size} pending migrations:"
@@ -243,7 +222,7 @@ if defined?(ActiveRecord)
       desc "Load a schema.rb file into the database"
       task :load => :environment do
         file = ENV['SCHEMA'] || Padrino.root("db", "schema.rb")
-        if File.exists?(file)
+        if File.exist?(file)
           load(file)
         else
           raise %{#{file} doesn't exist yet. Run "rake ar:migrate" to create it then try again. If you do not intend to use a database, you should instead alter #{Padrino.root}/config/boot.rb to limit the frameworks that will be loaded}
@@ -255,89 +234,87 @@ if defined?(ActiveRecord)
       desc "Dump the database structure to a SQL file"
       task :dump => :environment do
         abcs = ActiveRecord::Base.configurations
-        case abcs[Padrino.env][:adapter]
-        when "mysql", "mysql2", "oci", "oracle", 'jdbcmysql'
-          ActiveRecord::Base.establish_connection(abcs[Padrino.env])
-          File.open("#{Padrino.root}/db/#{Padrino.env}_structure.sql", "w+") { |f| f << ActiveRecord::Base.connection.structure_dump }
+        config = abcs[Padrino.env]
+        case config[:adapter]
+        when "mysql", "mysql2", 'em_mysql2', "oci", "oracle", 'jdbcmysql'
+          config = config.inject({}){|result, (key, value)| result[key.to_s] = value; result }
+          ActiveRecord::Tasks::DatabaseTasks.structure_dump(config, resolve_structure_sql)
         when "postgresql"
-          ENV['PGHOST']     = abcs[Padrino.env][:host] if abcs[Padrino.env][:host]
-          ENV['PGPORT']     = abcs[Padrino.env][:port].to_s if abcs[Padrino.env][:port]
-          ENV['PGPASSWORD'] = abcs[Padrino.env][:password].to_s if abcs[Padrino.env][:password]
-          search_path = abcs[Padrino.env][:schema_search_path]
+          ENV['PGHOST']     = config[:host] if config[:host]
+          ENV['PGPORT']     = config[:port].to_s if config[:port]
+          ENV['PGPASSWORD'] = config[:password].to_s if config[:password]
+          search_path = config[:schema_search_path]
           unless search_path.blank?
             search_path = search_path.split(",").map{|search_path| "--schema=#{search_path.strip}" }.join(" ")
           end
-          `pg_dump -i -U "#{abcs[Padrino.env][:username]}" -s -x -O -f db/#{Padrino.env}_structure.sql #{search_path} #{abcs[Padrino.env][:database]}`
+          `pg_dump -i -U "#{config[:username]}" -s -x -O -f db/#{Padrino.env}_structure.sql #{search_path} #{config[:database]}`
           raise "Error dumping database" if $?.exitstatus == 1
         when "sqlite", "sqlite3"
-          dbfile = abcs[Padrino.env][:database] || abcs[Padrino.env][:dbfile]
-          `#{abcs[Padrino.env][:adapter]} #{dbfile} .schema > db/#{Padrino.env}_structure.sql`
+          dbfile = config[:database] || config[:dbfile]
+          `#{config[:adapter]} #{dbfile} .schema > db/#{Padrino.env}_structure.sql`
         when "sqlserver"
-          `scptxfr /s #{abcs[Padrino.env][:host]} /d #{abcs[Padrino.env][:database]} /I /f db\\#{Padrino.env}_structure.sql /q /A /r`
-          `scptxfr /s #{abcs[Padrino.env][:host]} /d #{abcs[Padrino.env][:database]} /I /F db\ /q /A /r`
+          `scptxfr /s #{config[:host]} /d #{config[:database]} /I /f db\\#{Padrino.env}_structure.sql /q /A /r`
+          `scptxfr /s #{config[:host]} /d #{config[:database]} /I /F db\ /q /A /r`
         when "firebird"
-          set_firebird_env(abcs[Padrino.env])
-          db_string = firebird_db_string(abcs[Padrino.env])
+          set_firebird_env(config)
+          db_string = firebird_db_string(config)
           sh "isql -a #{db_string} > #{Padrino.root}/db/#{Padrino.env}_structure.sql"
         else
-          raise "Task not supported by '#{abcs[Padrino.env][:adapter]}'"
+          raise "Task not supported by '#{config[:adapter]}'"
         end
 
         if ActiveRecord::Base.connection.supports_migrations?
-          File.open("#{Padrino.root}/db/#{Padrino.env}_structure.sql", "a") { |f| f << ActiveRecord::Base.connection.dump_schema_information }
+          File.open(resolve_structure_sql, "a"){|f| f << ActiveRecord::Base.connection.dump_schema_information }
         end
       end
     end
 
-    if defined?(I18n)
-      desc "Generates .yml files for I18n translations"
-      task :translate => :environment do
-        models = Dir["#{Padrino.root}/{app,}/models/**/*.rb"].map { |m| File.basename(m, ".rb") }
+    desc "Generates .yml files for I18n translations"
+    task :translate => :environment do
+      models = Dir["#{Padrino.root}/{app,}/models/**/*.rb"].map { |m| File.basename(m, ".rb") }
 
-        models.each do |m|
-          # Get the model class
-          klass = m.camelize.constantize
+      models.each do |m|
+        # Get the model class.
+        klass = m.camelize.constantize
 
-          # Avoid non ActiveRecord models
-          next unless klass.ancestors.include?(ActiveRecord::Base)
+        # Avoid non ActiveRecord models.
+        next unless klass.ancestors.include?(ActiveRecord::Base)
 
-          # Init the processing
-          print "Processing #{m.humanize}: "
-          FileUtils.mkdir_p("#{Padrino.root}/app/locale/models/#{m}")
-          langs = Array(I18n.locale) # for now we use only one
+        # Init the processing.
+        print "Processing #{m.humanize}: "
+        FileUtils.mkdir_p("#{Padrino.root}/app/locale/models/#{m}")
+        langs = Array(I18n.locale)
 
-          # Create models for it and en locales
-          langs.each do |lang|
-            filename   = "#{Padrino.root}/app/locale/models/#{m}/#{lang}.yml"
-            columns    = klass.columns.map(&:name)
-            # If the lang file already exist we need to check it
-            if File.exist?(filename)
-              locale = File.open(filename).read
-              columns.each do |c|
-                locale += "\n        #{c}: #{klass.human_attribute_name(c)}" unless locale.include?("#{c}:")
-              end
-              print "Lang #{lang.to_s.upcase} already exist ... "; $stdout.flush
-              # Do some ere
-            else
-              locale     = "#{lang}:" + "\n" +
-                           "  models:" + "\n" +
-                           "    #{m}:" + "\n" +
-                           "      name: #{klass.model_name.human}" + "\n" +
-                           "      attributes:" + "\n" +
-                           columns.map { |c| "        #{c}: #{klass.human_attribute_name(c)}" }.join("\n")
-              print "created a new for #{lang.to_s.upcase} Lang ... "; $stdout.flush
+        # Create models for it and en locales.
+        langs.each do |lang|
+          filename   = "#{Padrino.root}/app/locale/models/#{m}/#{lang}.yml"
+          columns    = klass.columns.map(&:name)
+          # If the lang file already exist we need to check it.
+          if File.exist?(filename)
+            locale = File.open(filename).read
+            columns.each do |c|
+              locale += "\n        #{c}: #{klass.human_attribute_name(c)}" unless locale.include?("#{c}:")
             end
-            File.open(filename, "w") { |f| f.puts locale }
+            print "Lang #{lang.to_s.upcase} already exist ... "; $stdout.flush
+          else
+            locale     = "#{lang}:" + "\n" +
+                         "  models:" + "\n" +
+                         "    #{m}:" + "\n" +
+                         "      name: #{klass.model_name.human}" + "\n" +
+                         "      attributes:" + "\n" +
+                         columns.map { |c| "        #{c}: #{klass.human_attribute_name(c)}" }.join("\n")
+            print "created a new for #{lang.to_s.upcase} Lang ... "; $stdout.flush
           end
-          puts
+          File.open(filename, "w") { |f| f.puts locale }
         end
+        puts
       end
     end
   end
 
   def drop_database(config)
     case config[:adapter]
-    when 'mysql', 'mysql2', 'jdbcmysql'
+    when 'mysql', 'mysql2', 'em_mysql2', 'jdbcmysql'
       ActiveRecord::Base.establish_connection(config)
       ActiveRecord::Base.connection.drop_database config[:database]
     when /^sqlite/
@@ -360,4 +337,42 @@ if defined?(ActiveRecord)
   def firebird_db_string(config)
     FireRuby::Database.db_string_for(config.symbolize_keys)
   end
+
+  def catch_error(type, error, config)
+    $stderr.puts *(error.backtrace)
+    $stderr.puts error.inspect
+    case type
+    when :create
+      $stderr.puts "Couldn't create database for #{config.inspect}"
+    when :drop
+      $stderr.puts "Couldn't drop #{config[:database]}"
+    end
+  end
+
+  def migrate_as(type)
+    version = ENV["VERSION"] ? ENV["VERSION"].to_i : nil
+    raise "VERSION is required" unless version
+    ActiveRecord::Migrator.run(type, "db/migrate/", version)
+    dump_schema
+  end
+
+  def move_as(type)
+    step = ENV['STEP'] ? ENV['STEP'].to_i : 1
+    ActiveRecord::Migrator.send(type, 'db/migrate/', step)
+    dump_schema
+  end
+
+  def dump_schema
+    Rake::Task["ar:schema:dump"].invoke if ActiveRecord::Base.schema_format == :ruby
+  end
+
+  def resolve_structure_sql
+    "#{Padrino.root}/db/#{Padrino.env}_structure.sql"
+  end
+
+  task 'db:migrate' => 'ar:migrate'
+  task 'db:create'  => 'ar:create'
+  task 'db:drop'    => 'ar:drop'
+  task 'db:reset'   => 'ar:reset'
+  task 'db:setup'   => 'ar:setup'
 end

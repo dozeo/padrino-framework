@@ -7,20 +7,20 @@ module Padrino
       ##
       # Page caching is easy to integrate into your application. To turn it on, simply provide the
       # <tt>:cache => true</tt> option on either a controller or one of its routes.
-      # By default, cached content is persisted with a "file store"--that is, in a
+      # By default, cached content is persisted with a "file store" --that is, in a
       # subdirectory of your application root.
       #
       # @example
-      #   # Setting content expiry time
+      #   # Setting content expiry time.
       #   class CachedApp < Padrino::Application
       #     enable :caching          # turns on caching mechanism
       #
       #     controller '/blog', :cache => true do
-      #       expires_in 15
+      #       expires 15
       #
       #       get '/entries' do
-      #         # expires_in 15 => can also be defined inside a single route
-      #         'just broke up eating twinkies lol'
+      #         # expires 15 => can also be defined inside a single route
+      #         'Just broke up eating twinkies, lol'
       #       end
       #
       #       get '/post/:id' do
@@ -32,7 +32,7 @@ module Padrino
       #
       # You can manually expire cache with CachedApp.cache.delete(:my_name)
       #
-      # Note that the "latest" method call to <tt>expires_in</tt> determines its value: if
+      # Note that the "latest" method call to <tt>expires</tt> determines its value: if
       # called within a route, as opposed to a controller definition, the route's
       # value will be assumed.
       #
@@ -51,18 +51,22 @@ module Padrino
         #
         # @example
         #   controller '/blog', :cache => true do
-        #     expires_in 15
+        #     expires 15
         #
         #     get '/entries' do
-        #       # expires_in 15 => can also be defined inside a single route
-        #       'just broke up eating twinkies lol'
+        #       'Just broke up eating twinkies, lol'
         #     end
         #   end
         #
         # @api public
+        def expires(time)
+          @route.cache_expires = time if @route
+          @_last_expires       = time
+        end
+
         def expires_in(time)
-          @route.cache_expires_in = time if @route
-          @_last_expires_in       = time
+          warn 'expires_in has been deprecated in favour of expires'
+          expires(time)
         end
 
         ##
@@ -70,6 +74,8 @@ module Padrino
         #
         # @param [Symbol] name
         #   cache key
+        # @param [Proc] block
+        #   block to be evaluated to cache key
         #
         # @example
         #   controller '/blog', :cache => true do
@@ -80,48 +86,65 @@ module Padrino
         #     end
         #   end
         #
-        # @api public
-        def cache_key(name)
-          @route.cache_key = name
+        # @example
+        #     get '/foo', :cache => true do
+        #       cache_key { param[:id] }
+        #       "My id is #{param[:id}"
+        #     end
+        #   end
+        #
+        def cache_key(name = nil, &block)
+          raise "Can not provide both cache_key and a block" if name && block
+          @route.cache_key = block_given? ? block : name
         end
 
-        # @private
-        def self.padrino_route_added(route, verb, path, args, options, block) # @private
+        def self.padrino_route_added(route, verb, path, args, options, block)
           if route.cache and %w(GET HEAD).include?(verb)
             route.before_filters do
               if settings.caching?
-                began_at = Time.now
-                value = settings.cache.get(@route.cache_key || env['PATH_INFO'])
+                began_at     = Time.now
+
+                value = settings.cache[resolve_cache_key || env['PATH_INFO']]
                 logger.debug "GET Cache", began_at, @route.cache_key || env['PATH_INFO'] if defined?(logger) && value
 
-                if value
-                  content_type(value[:content_type]) if value[:content_type]
-                  halt 200, value[:response_buffer] if value[:response_buffer]
+                if value.kind_of?(Hash)
+                  content_type value[:content_type]
+                  halt 200, value[:body]
+                elsif value
+                  halt 200, value
                 end
               end
             end
 
             route.after_filters do
-              if settings.caching?
-                began_at = Time.now
-
+              if settings.caching? && @_response_buffer.kind_of?(String)
+                began_at     = Time.now
                 content = {
-                  :response_buffer => @_response_buffer,
-                  :content_type    => @_content_type
+                  :body         => @_response_buffer,
+                  :content_type => @_content_type
                 }
 
-                if @_last_expires_in
-                  settings.cache.set(@route.cache_key || env['PATH_INFO'], content, :expires_in => @_last_expires_in)
-                  @_last_expires_in = nil
+                if @_last_expires
+                  settings.cache.store(resolve_cache_key || env['PATH_INFO'], content, :expires => @_last_expires)
+                  @_last_expires = nil
                 else
-                  settings.cache.set(@route.cache_key || env['PATH_INFO'], content)
+                  settings.cache.store(resolve_cache_key || env['PATH_INFO'], content)
                 end
+
                 logger.debug "SET Cache", began_at, @route.cache_key || env['PATH_INFO'] if defined?(logger)
               end
             end
           end
         end
-      end # Page
-    end # Helpers
-  end # Cache
-end # Padrino
+
+        private
+        ##
+        # Resolve the cache_key when it's a block in the correct context.
+        #
+        def resolve_cache_key
+          @route.cache_key.is_a?(Proc) ? instance_eval(&@route.cache_key) : @route.cache_key
+        end
+      end
+    end
+  end
+end

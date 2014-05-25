@@ -9,6 +9,27 @@ DM = (<<-DM) unless defined?(DM)
 # # A Sqlite3 connection
 # DataMapper.setup(:default, "sqlite3://" + Padrino.root('db', "development.db"))
 #
+# # Setup DataMapper using config/database.yml
+# DataMapper.setup(:default, YAML.load_file(Padrino.root('config/database.yml'))[RACK_ENV])
+#
+# config/database.yml file:
+#
+# ---
+# development: &defaults
+#   adapter: mysql
+#   database: example_development
+#   username: user
+#   password: Pa55w0rd
+#   host: 127.0.0.1
+#
+# test:
+#   <<: *defaults
+#   database: example_test
+#
+# production:
+#   <<: *defaults
+#   database: example_production
+#
 
 DataMapper.logger = logger
 DataMapper::Property::String.length(255)
@@ -22,9 +43,10 @@ DM
 
 def setup_orm
   dm = DM
-  db = @app_name.underscore
+  db = @project_name.underscore
   %w(
     dm-core
+    dm-types
     dm-aggregates
     dm-constraints
     dm-migrations
@@ -99,7 +121,7 @@ MIGRATION
 
 def create_model_migration(migration_name, name, columns)
   output_model_migration(migration_name, name, columns,
-       :column_format => Proc.new { |field, kind| "column :#{field}, #{kind.classify}#{', :length => 255' if kind =~ /string/i}" },
+       :column_format => Proc.new { |field, kind| "column :#{field}, DataMapper::Property::#{kind.classify}#{', :length => 255' if kind =~ /string/i}" },
        :base => DM_MIGRATION, :up => DM_MODEL_UP_MG, :down => DM_MODEL_DOWN_MG)
 end
 

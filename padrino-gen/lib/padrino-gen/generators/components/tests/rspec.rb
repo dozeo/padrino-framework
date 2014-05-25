@@ -1,16 +1,23 @@
 RSPEC_SETUP = (<<-TEST).gsub(/^ {12}/, '') unless defined?(RSPEC_SETUP)
-PADRINO_ENV = 'test' unless defined?(PADRINO_ENV)
+RACK_ENV = 'test' unless defined?(RACK_ENV)
 require File.expand_path(File.dirname(__FILE__) + "/../config/boot")
 
 RSpec.configure do |conf|
   conf.include Rack::Test::Methods
 end
 
-def app
-  ##
-  # You can handle all padrino applications using instead:
-  #   Padrino.application
-  CLASS_NAME.tap { |app|  }
+# You can use this method to custom specify a Rack app
+# you want rack-test to invoke:
+#
+#   app CLASS_NAME
+#   app CLASS_NAME.tap { |a| }
+#   app(CLASS_NAME) do
+#     set :foo, :bar
+#   end
+#
+def app(app = nil, &blk)
+  @app ||= block_given? ? app.instance_eval(&blk) : app
+  @app ||= Padrino.application
 end
 TEST
 
@@ -29,28 +36,45 @@ end
 TEST
 
 RSPEC_RAKE = (<<-TEST).gsub(/^ {12}/, '') unless defined?(RSPEC_RAKE)
-require 'rspec/core/rake_task'
+begin
+  require 'rspec/core/rake_task'
 
-spec_tasks = Dir['spec/*/'].map { |d| File.basename(d) }
-
-spec_tasks.each do |folder|
-  RSpec::Core::RakeTask.new("spec:\#{folder}") do |t|
-    t.pattern = "./spec/\#{folder}/**/*_spec.rb"
-    t.rspec_opts = %w(-fs --color)
+  spec_tasks = Dir['spec/*/'].inject([]) do |result, d|
+    result << File.basename(d) unless Dir["\#{d}*"].empty?
+    result
   end
-end
 
-desc "Run complete application spec suite"
-task 'spec' => spec_tasks.map { |f| "spec:\#{f}" }
+  spec_tasks.each do |folder|
+    RSpec::Core::RakeTask.new("spec:\#{folder}") do |t|
+      t.pattern = "./spec/\#{folder}/**/*_spec.rb"
+      t.rspec_opts = %w(-fs --color)
+    end
+  end
+
+  desc "Run complete application spec suite"
+  task 'spec' => spec_tasks.map { |f| "spec:\#{f}" }
+rescue LoadError
+  puts "RSpec is not part of this bundle, skip specs."
+end
 TEST
 
 RSPEC_MODEL_TEST = (<<-TEST).gsub(/^ {12}/, '') unless defined?(RSPEC_MODEL_TEST)
 require 'spec_helper'
 
-describe "!NAME! Model" do
-  let(:!DNAME!) { !NAME!.new }
-  it 'can be created' do
-    !DNAME!.should_not be_nil
+describe !NAME! do
+end
+TEST
+
+RSPEC_HELPER_TEST = (<<-TEST) unless defined?(RSPEC_HELPER_TEST)
+require 'spec_helper'
+
+describe "!NAME!" do
+  let(:helpers){ Class.new }
+  before { helpers.extend !NAME! }
+  subject { helpers }
+
+  it "should return nil" do
+    expect(subject.foo).to be_nil
   end
 end
 TEST
@@ -62,7 +86,6 @@ def setup_test
   create_file destination_root("spec/spec.rake"), RSPEC_RAKE
 end
 
-# Generates a controller test given the controllers name
 def generate_controller_test(name)
   rspec_contents = RSPEC_CONTROLLER_TEST.gsub(/!NAME!/, name.to_s.underscore.camelize)
   controller_spec_path = File.join('spec',options[:app],'controllers',"#{name.to_s.underscore}_controller_spec.rb")
@@ -73,4 +96,10 @@ def generate_model_test(name)
   rspec_contents = RSPEC_MODEL_TEST.gsub(/!NAME!/, name.to_s.underscore.camelize).gsub(/!DNAME!/, name.to_s.underscore)
   model_spec_path = File.join('spec',options[:app],'models',"#{name.to_s.underscore}_spec.rb")
   create_file destination_root(model_spec_path), rspec_contents, :skip => true
+end
+
+def generate_helper_test(name, project_name, app_name)
+  rspec_contents = RSPEC_HELPER_TEST.gsub(/!NAME!/, "#{project_name}::#{app_name}::#{name}")
+  helper_spec_path = File.join('spec', options[:app], 'helpers', "#{name.underscore}_spec.rb")
+  create_file destination_root(helper_spec_path), rspec_contents, :skip => true
 end

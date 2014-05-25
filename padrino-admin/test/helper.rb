@@ -1,14 +1,18 @@
-ENV['PADRINO_ENV'] = 'test'
+ENV['RACK_ENV'] = 'test'
 PADRINO_ROOT = File.dirname(__FILE__) unless defined? PADRINO_ROOT
 
 require File.expand_path('../../../load_paths', __FILE__)
-require File.join(File.dirname(__FILE__), '..', '..', 'padrino-core', 'test', 'mini_shoulda')
+require 'minitest/autorun'
+require 'minitest/pride'
+require 'mocha/setup'
 require 'rack/test'
 require 'rack'
-require 'uuid'
 require 'thor/group'
-require 'padrino-core/support_lite' unless defined?(SupportLite)
 require 'padrino-admin'
+require 'dm-core'
+require 'dm-migrations'
+require 'dm-validations'
+require 'dm-aggregates'
 
 Padrino::Generators.load_components!
 
@@ -21,11 +25,6 @@ module Kernel
   end
 end
 
-class Class
-  # Allow assertions in request context
-  include MiniTest::Assertions
-end
-
 class MiniTest::Spec
   include Rack::Test::Methods
 
@@ -34,7 +33,6 @@ class MiniTest::Spec
   # the application.
   def mock_app(base=Padrino::Application, &block)
     @app = Sinatra.new(base, &block)
-    @app.send :include, MiniTest::Assertions
     @app.register Padrino::Helpers
   end
 
@@ -63,7 +61,7 @@ class MiniTest::Spec
   end
 
   def assert_no_match_in_file(pattern, file)
-    File.exists?(file) ? assert_no_match(pattern, File.read(file)) : assert_file_exists(file)
+    File.exist?(file) ? refute_match(pattern, File.read(file)) : assert_file_exists(file)
   end
 
   # Delegate other missing methods to response.
